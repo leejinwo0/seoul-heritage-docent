@@ -48,6 +48,12 @@ def embed_query(text: str) -> list[float]:
     raise RuntimeError("임베딩 재시도 실패")
 
 
+def connect() -> psycopg.Connection:
+    """DB 연결. prepare_threshold=None: Supabase 풀러(특히 Transaction 모드)와 충돌하는
+    서버 측 prepared statement를 쓰지 않음 → 로컬·Vercel 어디서나 안전"""
+    return psycopg.connect(os.environ["DATABASE_URL"], prepare_threshold=None)
+
+
 def to_vector(v: list[float]) -> str:
     return "[" + ",".join(f"{x:.7f}" for x in v) + "]"
 
@@ -62,7 +68,7 @@ def search_by_vector(vec: list[float], lat: float | None = None, lon: float | No
                      conn: psycopg.Connection | None = None) -> list[dict]:
     """이미 임베딩된 질문 벡터로 검색 (평가에서 같은 질문을 가중치별로 여러 번 돌릴 때 사용)"""
     own = conn is None
-    conn = conn or psycopg.connect(os.environ["DATABASE_URL"])
+    conn = conn or connect()
     try:
         rows = conn.execute(
             "select * from search_chunks(%s::vector, %s, %s, %s, %s)",
@@ -82,7 +88,7 @@ def search(question: str, lat: float | None = None, lon: float | None = None,
 
 def nearest_segment(lat: float, lon: float, conn: psycopg.Connection | None = None) -> dict | None:
     own = conn is None
-    conn = conn or psycopg.connect(os.environ["DATABASE_URL"])
+    conn = conn or connect()
     try:
         row = conn.execute("select * from nearest_segment(%s, %s)", (lat, lon)).fetchone()
     finally:

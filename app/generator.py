@@ -22,7 +22,7 @@ import urllib.request
 from app import retrieval as R
 
 # AI Studio에서 무료로 쓸 수 있는 모델 이름으로 바꿔 쓰세요 (.env의 GEMINI_MODEL이 우선)
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 API = "https://generativelanguage.googleapis.com/v1beta"
 
 SYSTEM_PROMPT = """당신은 서울 한양도성을 안내하는 역사 도슨트입니다.
@@ -35,7 +35,7 @@ SYSTEM_PROMPT = """당신은 서울 한양도성을 안내하는 역사 도슨�
 4. '이야기체' 표시가 있는 자료는 극화된 서술이 섞여 있습니다. 내용을 전할 때는
    "해설에 따르면"처럼 출처를 밝히고, 대사나 인물의 속마음은 사실처럼 단정하지 마세요.
 5. [사용자 위치]의 거리는 성곽 선까지의 거리일 뿐, 특정 장소까지의 거리가 아닙니다.
-   장소까지의 거리는 자료에 '사용자로부터 약 ○○m'가 적혀 있을 때만 말하고,
+   장소까지의 거리는 자료에 '현재 위치에서 약 ○○m'가 적혀 있을 때만 "지금 계신 곳에서 약 ○○m"처럼 말하고,
    없으면 "이 근처에 있는" 처럼 거리 없이 표현하세요.
 6. 현장에서 듣는 해설처럼 친근한 존댓말로, 3~6문장 정도로 간결하게 답하세요."""
 
@@ -47,10 +47,9 @@ def model_name() -> str:
 def build_context(chunks: list[dict], segment: dict | None) -> str:
     lines = []
     if segment:
-        lines.append(
-            f"[사용자 위치] 가장 가까운 성곽 구간은 {segment['name']}이며, "
-            f"성곽 선까지 약 {segment['distance_m']:.0f}m (특정 장소까지의 거리 아님)"
-        )
+        lines.append(f"[사용자 위치] 가장 가까운 성곽 구간은 {segment['name']}이며, "
+                     f"성곽 선까지 약 {segment['distance_m']:.0f}m (특정 장소까지의 거리 아님)")
+        lines.append("")
     lines.append("[자료]")
     for i, c in enumerate(chunks, 1):
         tags = [c["source"] or ""]
@@ -66,21 +65,13 @@ def build_context(chunks: list[dict], segment: dict | None) -> str:
 
 def call_gemini(system: str, user: str, temperature: float = 0.3) -> str:
     url = f"{API}/models/{model_name()}:generateContent"
-    body = json.dumps(
-        {
-            "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": {"temperature": temperature, "maxOutputTokens": 2048},
-        }
-    ).encode()
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "x-goog-api-key": os.environ["GEMINI_API_KEY"],
-        },
-    )
+    body = json.dumps({
+        "systemInstruction": {"parts": [{"text": system}]},
+        "contents": [{"role": "user", "parts": [{"text": user}]}],
+        "generationConfig": {"temperature": temperature, "maxOutputTokens": 2048},
+    }).encode()
+    req = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json", "x-goog-api-key": os.environ["GEMINI_API_KEY"]})
 
     for attempt in range(4):
         try:
@@ -90,13 +81,11 @@ def call_gemini(system: str, user: str, temperature: float = 0.3) -> str:
         except urllib.error.HTTPError as e:
             # 429: 사용량 한도, 500/503: 서버 일시 과부하 → 점점 길게 기다리며 재시도
             if e.code in (429, 500, 503) and attempt < 3:
-                wait = 5 * (2**attempt)  # 5초 → 10초 → 20초
+                wait = 5 * (2 ** attempt)          # 5초 → 10초 → 20초
                 print(f"  Gemini 응답 지연({e.code}) → {wait}초 후 재시도")
                 time.sleep(wait)
                 continue
-            raise RuntimeError(
-                f"Gemini API 오류 {e.code}: {e.read().decode()[:300]}"
-            ) from e
+            raise RuntimeError(f"Gemini API 오류 {e.code}: {e.read().decode()[:300]}") from e
 
     cands = data.get("candidates") or []
     if not cands:
@@ -111,26 +100,15 @@ def call_gemini(system: str, user: str, temperature: float = 0.3) -> str:
 CITE_RE = re.compile(r"\[(\d+)\]")
 
 
-def answer(
-    question: str,
-    lat: float | None = None,
-    lon: float | None = None,
-    k: int = 5,
-    location_weight: float = 0.1,
-) -> dict:
+def answer(question: str, lat: float | None = None, lon: float | None = None,
+           k: int = 5, location_weight: float = 0.1) -> dict:
     """질문 → 검색 → 답변 생성. 답변 본문, 인용된 출처, 지도에 표시할 장소를 반환."""
-    segment = (
-        R.nearest_segment(lat, lon) if lat is not None and lon is not None else None
-    )
+    segment = R.nearest_segment(lat, lon) if lat is not None and lon is not None else None
     chunks = R.search(question, lat, lon, k, location_weight)
 
     if not chunks:
-        return {
-            "answer": "제가 가진 자료에서 관련 내용을 찾지 못했어요.",
-            "sources": [],
-            "places": [],
-            "segment": segment,
-        }
+        return {"answer": "제가 가진 자료에서 관련 내용을 찾지 못했어요.",
+                "sources": [], "places": [], "segment": segment}
 
     user = f"{build_context(chunks, segment)}\n[질문]\n{question}"
     text = call_gemini(SYSTEM_PROMPT, user)
@@ -143,49 +121,34 @@ def answer(
             cited.append(i)
     remap = {old: new for new, old in enumerate(cited, 1)}
     text = CITE_RE.sub(
-        lambda m: f"[{remap[int(m.group(1))]}]" if int(m.group(1)) in remap else "",
-        text,
-    )
+        lambda m: f"[{remap[int(m.group(1))]}]" if int(m.group(1)) in remap else "", text)
 
-    sources = [
-        {
-            "n": remap[i],
-            "title": chunks[i - 1]["title"],
-            "source": chunks[i - 1]["source"],
-            "license": chunks[i - 1]["license"],
-            "narrative": chunks[i - 1]["style"] == "narrative",
-            "audio_url": chunks[i - 1]["audio_url"],
-            "image_url": chunks[i - 1]["image_url"],
-            "place_id": chunks[i - 1]["place_id"],
-            "excerpt": chunks[i - 1]["content"][:200],
-        }
-        for i in cited
-    ]
+    sources = [{
+        "n": remap[i],
+        "title": chunks[i - 1]["title"],
+        "source": chunks[i - 1]["source"],
+        "license": chunks[i - 1]["license"],
+        "narrative": chunks[i - 1]["style"] == "narrative",
+        "audio_url": chunks[i - 1]["audio_url"],
+        "image_url": chunks[i - 1]["image_url"],
+        "place_id": chunks[i - 1]["place_id"],
+        "excerpt": chunks[i - 1]["content"][:200],
+    } for i in cited]
 
     places = []
     for s in sources:
         if s["place_id"] and s["place_id"] not in places:
             places.append(s["place_id"])
 
-    return {
-        "answer": text,
-        "sources": sources,
-        "places": places,
-        "segment": segment,
-        "model": model_name(),
-    }
+    return {"answer": text, "sources": sources, "places": places,
+            "segment": segment, "model": model_name()}
 
 
 def list_models() -> list[str]:
     """이 API 키로 답변 생성(generateContent)에 쓸 수 있는 모델 목록"""
-    req = urllib.request.Request(
-        f"{API}/models?pageSize=200",
-        headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]},
-    )
+    req = urllib.request.Request(f"{API}/models?pageSize=200",
+                                 headers={"x-goog-api-key": os.environ["GEMINI_API_KEY"]})
     with urllib.request.urlopen(req, timeout=30) as res:
         data = json.load(res)
-    return sorted(
-        m["name"].removeprefix("models/")
-        for m in data.get("models", [])
-        if "generateContent" in m.get("supportedGenerationMethods", [])
-    )
+    return sorted(m["name"].removeprefix("models/") for m in data.get("models", [])
+                  if "generateContent" in m.get("supportedGenerationMethods", []))
