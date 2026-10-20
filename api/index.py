@@ -82,9 +82,9 @@ def ask(req: AskRequest):
     located = in_seoul(req.lat, req.lon)
     try:
         res = G.answer(q, req.lat if located else None, req.lon if located else None)
-    except RuntimeError as e:
-        # Gemini 한도 초과·일시 장애 등 → 사용자에게는 짧은 안내만
-        print(f"[ask] {e}")
+    except Exception as e:
+        # Gemini 한도 초과·시간 초과·일시 장애 등 → 사용자에게는 짧은 안내만
+        print(f"[ask] {type(e).__name__}: {e}")
         raise HTTPException(
             503, "지금은 답변을 만들 수 없어요. 잠시 후 다시 시도해주세요."
         ) from e
