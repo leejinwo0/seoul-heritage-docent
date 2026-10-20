@@ -2,60 +2,61 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>한양도성 도슨트</title>
   <meta name="description" content="한양도성 성곽길 위에서 지금 서 있는 곳의 역사를 묻고 답을 듣는 지도">
+  <link rel="icon" href="data:,">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  <div class="layout">
-    <aside class="panel" aria-label="도슨트 질문">
-      <header class="panel-head">
-        <h1 class="title">한양도성 도슨트</h1>
-        <p class="lede">성곽길 위 한 지점을 고르고, 그 자리의 이야기를 물어보세요.</p>
-      </header>
+  <main id="map" class="map" aria-label="한양도성 지도"></main>
+  <p id="map-note" class="map-note" hidden></p>
 
-      <section id="where" class="where" aria-live="polite">
-        <p id="where-text" class="where-text">지도를 눌러 서 있을 위치를 정하세요.</p>
-        <div class="where-actions">
-          <button type="button" id="btn-geo" class="btn-quiet">현재 위치 사용</button>
-          <button type="button" id="btn-clear" class="btn-quiet" hidden>위치 지우기</button>
-        </div>
-      </section>
+  <section id="sheet" class="sheet" data-state="peek" aria-label="도슨트">
+    <button type="button" id="grip" class="grip" aria-label="패널 높이 조절"><span></span></button>
 
-      <form id="ask-form" class="ask" autocomplete="off">
-        <label for="q" class="sr-only">질문</label>
-        <textarea id="q" name="q" rows="2" maxlength="300" placeholder="여기는 어떤 곳이야?" required></textarea>
-        <button type="submit" id="btn-ask" class="btn-primary">물어보기</button>
-      </form>
-
-      <div class="examples" role="group" aria-label="예시 질문">
-        <button type="button" class="chip" data-q="여기는 어떤 곳이야?">여기는 어떤 곳이야?</button>
-        <button type="button" class="chip" data-q="이 구간은 얼마나 걸려?">이 구간은 얼마나 걸려?</button>
-        <button type="button" class="chip" data-q="숭례문은 언제 지어졌어?">숭례문은 언제 지어졌어?</button>
+    <header class="sheet-head">
+      <h1 class="brand">한양도성 도슨트</h1>
+      <div id="loc" class="loc">
+        <span class="loc-dot" aria-hidden="true"></span>
+        <span id="loc-text" class="loc-text" aria-live="polite">위치 미지정</span>
+        <button type="button" id="btn-geo" class="loc-btn">내 위치</button>
+        <button type="button" id="btn-clear" class="loc-btn" hidden aria-label="위치 지우기">지우기</button>
       </div>
+    </header>
 
-      <section id="result" class="result" aria-live="polite" hidden>
-        <div id="answer" class="answer"></div>
-        <h2 class="sources-title">근거 자료</h2>
-        <ol id="sources" class="sources"></ol>
-      </section>
+    <div id="thread" class="thread" aria-live="polite">
+      <div id="intro" class="intro">
+        <p class="intro-lead">성곽길 위 한 곳을 골라 그 자리의 이야기를 물어보세요.</p>
+        <p class="intro-step">지도를 누르면 그곳에 서 있는 것으로 보고 답합니다. 장소 점을 누르면 그 장소에 대해 바로 물을 수 있어요.</p>
+        <p class="intro-src">자료: 서울 열린데이터광장 한양도성 공공데이터, 국가유산청. 답변은 이 자료 안에서만 만들어집니다.</p>
+      </div>
+    </div>
 
-      <p id="error" class="error" role="alert" hidden></p>
+    <div id="place-card" class="place-card" hidden>
+      <div class="place-card-head">
+        <p id="place-name" class="place-name"></p>
+        <button type="button" id="place-close" class="place-close" aria-label="장소 카드 닫기">닫기</button>
+      </div>
+      <div class="place-actions">
+        <button type="button" id="place-stand" class="btn-soft">여기 서서 묻기</button>
+        <button type="button" id="place-ask" class="btn-soft">이곳에 대해 묻기</button>
+      </div>
+    </div>
 
-      <footer class="panel-foot">
-        <p>자료: 서울 열린데이터광장 한양도성 공공데이터, 국가유산청. 답변은 이 자료 안에서만 만들어지며, 이야기체 해설은 극화된 표현이 섞여 있을 수 있습니다.</p>
-      </footer>
-    </aside>
+    <div id="suggest" class="suggest" role="group" aria-label="추천 질문"></div>
 
-    <main class="map-wrap">
-      <div id="map" class="map" aria-label="한양도성 지도"></div>
-      <p id="map-note" class="map-note" hidden></p>
-    </main>
-  </div>
+    <form id="composer" class="composer" autocomplete="off">
+      <label for="q" class="sr-only">질문</label>
+      <textarea id="q" rows="1" maxlength="300" placeholder="여기는 어떤 곳이야?" required></textarea>
+      <button type="submit" id="btn-send" class="send" aria-label="질문 보내기">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 12h13M12 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </form>
+  </section>
 
   <script type="module" src="/js/main.js"></script>
 </body>

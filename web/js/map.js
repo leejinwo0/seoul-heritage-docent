@@ -18,6 +18,10 @@ const SSM_MAX_ZOOM = 11;
 
 const DEBUG = new URLSearchParams(location.search).has("debug");
 
+const PLACE_STYLE = { radius: 4.5, weight: 1.5, color: "#20262a", fillColor: "#f1f2ef", fillOpacity: 1 };
+const PLACE_HIT = { radius: 7, weight: 2, color: "#ffffff", fillColor: "#2e5242" };
+const PLACE_SELECTED = { radius: 7, weight: 2.5, color: "#2e5242", fillColor: "#ffffff" };
+
 function loadScript(src) {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
@@ -46,9 +50,7 @@ async function loadSeoulMap(key) {
     await loadCss(`${SSM}/${key}/public/map/css/5.0`);
     await loadScript(`${SSM}/${key}/public/map/js/5.0`);
     await loadScript(`${SSM}/${key}/public/map/base/js/5179/5.0`);
-    return (
-      typeof getCrsEx === "function" && !!(window.L && L.TileLayer.DAWULGIS_EX)
-    );
+    return typeof getCrsEx === "function" && !!(window.L && L.TileLayer.DAWULGIS_EX);
   } catch (e) {
     console.warn(e.message);
     return false;
@@ -62,7 +64,7 @@ async function ensureLeaflet() {
   await loadScript(`${LEAFLET_CDN}/leaflet.js`);
 }
 
-/** ?debug 모드: 줌 레벨별 타일 요청·성공·실패 수를 지도 좌하단에 표시 */
+/** ?debug 모드: 줌 레벨별 타일 요청·성공·실패 수를 지도 우하단에 표시 */
 function attachTileDebug(map, layer) {
   const note = document.getElementById("map-note");
   if (!note) return;
@@ -86,64 +88,82 @@ function attachTileDebug(map, layer) {
   show();
 }
 
-export async function createMap(el, { seoulMapKey }) {
+/**
+ * @param el 지도 컨테이너
+ * @param opts.seoulMapKey 스마트서울맵 키
+ * @param opts.getInsets () => {top,right,bottom,left} 시트에 가려지는 영역(px). 화면 맞춤 시 여백으로 사용
+ */
+export async function createMap(el, { seoulMapKey, getInsets = () => ({}) }) {
   const useSeoul = await loadSeoulMap(seoulMapKey);
   await ensureLeaflet();
 
-  let map,
-    baseLayer,
-    oldLayer = null,
-    detailZoom;
+  let map, baseLayer, oldLayer = null, detailZoom;
 
   if (useSeoul) {
     map = L.map(el, {
       crs: getCrsEx(),
       zoomControl: false,
       doubleClickZoom: false, // 위치 지정 클릭 시 확대 방지
-      zoomAnimation: false, // 확대 애니메이션 중 타일 레벨 전환 누락 방지
+      zoomAnimation: false,   // 확대 애니메이션 중 타일 레벨 전환 누락 방지
       minZoom: 5,
       maxZoom: SSM_MAX_ZOOM,
     }).setView(SSM_CENTER, SSM_START_ZOOM);
-
     baseLayer = new L.TileLayer.DAWULGIS_EX(
       `${SSM}/${seoulMapKey}/public/map/base/dawul_kor_normal/{z}/{j}/{k}/{x}/{y}/png`,
       { minZoom: 1, maxZoom: 15 },
     );
     oldLayer = L.tileLayer.wms(WMS_URL, {
-      layers: WMS_GYEONGSEONG,
-      format: "image/png",
-      transparent: true,
-      maxZoom: 18,
-      attribution: "경성대지도",
+      layers: WMS_GYEONGSEONG, format: "image/png", transparent: true,
+      maxZoom: 18, attribution: "경성대지도",
     });
     detailZoom = SSM_MAX_ZOOM;
   } else {
-    map = L.map(el, { zoomControl: false, doubleClickZoom: false }).setView(
-      SSM_CENTER,
-      14,
-    );
+    map = L.map(el, { zoomControl: false, doubleClickZoom: false }).setView(SSM_CENTER, 14);
     baseLayer = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
       maxZoom: 19,
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     });
     detailZoom = 16;
   }
 
   baseLayer.addTo(map);
   if (DEBUG) attachTileDebug(map, baseLayer);
-  L.control.zoom({ position: "bottomright" }).addTo(map);
   if (oldLayer) addLayerToggle(map, oldLayer);
+  L.control.zoom({ position: "topright" }).addTo(map);
 
-  // 컨테이너 크기 변화(모바일 회전·패널 높이 변화) 시 타일 재계산
+  // 컨테이너 크기 변화(모바일 회전·주소창 변화) 시 타일 재계산
   new ResizeObserver(() => map.invalidateSize()).observe(el);
 
   const wallLayer = L.layerGroup().addTo(map);
   const litLayer = L.layerGroup().addTo(map);
   const placeLayer = L.layerGroup().addTo(map);
   const placeMarkers = new Map();
+  const placeHandlers = [];
   let segmentsFc = null;
   let userMarker = null;
+  let selectedId = null;
+  let hitIds = [];
+
+  /** 시트에 가려지는 영역을 제외하고 화면 맞춤 */
+  function fitTo(bounds, maxZoom) {
+    const i = { top: 0, right: 0, bottom: 0, left: 0, ...getInsets() };
+    map.fitBounds(bounds, {
+      paddingTopLeft: [i.left + 32, i.top + 32],
+      paddingBottomRight: [i.right + 32, i.bottom + 32],
+      maxZoom,
+    });
+  }
+
+  function restylePlaces() {
+    placeMarkers.forEach((m, id) => {
+      if (id === selectedId) m.setStyle(PLACE_SELECTED);
+      else if (hitIds.includes(id)) m.setStyle(PLACE_HIT);
+      else m.setStyle(PLACE_STYLE);
+    });
+    hitIds.forEach((id) => placeMarkers.get(id)?.bringToFront());
+    if (selectedId) placeMarkers.get(selectedId)?.bringToFront();
+    userMarker?.bringToFront();
+  }
 
   return {
     provider: useSeoul ? "smart-seoul-map" : "openstreetmap",
@@ -152,95 +172,71 @@ export async function createMap(el, { seoulMapKey }) {
     drawSegments(fc) {
       segmentsFc = fc;
       wallLayer.clearLayers();
-      const casing = L.geoJSON(fc, {
-        style: { className: "wall-casing", weight: 9, interactive: false },
-      });
+      L.geoJSON(fc, { style: { className: "wall-casing", weight: 9, interactive: false } }).addTo(wallLayer);
       const line = L.geoJSON(fc, {
         style: { className: "wall-line", weight: 4.5 },
         onEachFeature: (f, layer) =>
-          layer.bindTooltip(f.properties.name, {
-            sticky: true,
-            className: "place-tip",
-          }),
-      });
-      casing.addTo(wallLayer);
-      line.addTo(wallLayer);
-      map.fitBounds(line.getBounds(), {
-        padding: [24, 24],
-        maxZoom: detailZoom,
-      });
+          layer.bindTooltip(f.properties.name, { sticky: true, className: "place-tip" }),
+      }).addTo(wallLayer);
+      fitTo(line.getBounds(), detailZoom);
     },
 
-    /** 좌표가 있는 장소 점 표시 */
+    /** 좌표가 있는 장소 점 표시. 클릭 시 onPlaceClick 핸들러 호출 */
     drawPlaces(fc) {
       placeLayer.clearLayers();
       placeMarkers.clear();
       fc.features.forEach((f) => {
         const [lon, lat] = f.geometry.coordinates;
-        const m = L.circleMarker([lat, lon], {
-          radius: 4.5,
-          weight: 1.5,
-          color: "#20262a",
-          fillColor: "#f1f2ef",
-          fillOpacity: 1,
-        }).bindTooltip(f.properties.name, {
-          className: "place-tip",
-          direction: "top",
-          offset: [0, -4],
-        });
+        const place = { id: f.properties.place_id, name: f.properties.name, lat, lon };
+        const m = L.circleMarker([lat, lon], PLACE_STYLE)
+          .bindTooltip(place.name, { className: "place-tip", direction: "top", offset: [0, -4] })
+          .on("click", (e) => {
+            L.DomEvent.stopPropagation(e); // 지도 클릭(위치 지정)과 분리
+            placeHandlers.forEach((h) => h(place));
+          });
         m.addTo(placeLayer);
-        placeMarkers.set(f.properties.place_id, m);
+        placeMarkers.set(place.id, m);
       });
     },
+
+    onPlaceClick(handler) { placeHandlers.push(handler); },
+
+    selectPlace(id) { selectedId = id; restylePlaces(); },
 
     /** 현재 구간 강조 (segment_id 또는 null) */
     lightSegment(segmentId) {
       litLayer.clearLayers();
       if (!segmentsFc || !segmentId) return;
-      const feat = segmentsFc.features.find(
-        (f) => f.properties.segment_id === segmentId,
-      );
-      if (feat)
-        L.geoJSON(feat, {
-          style: { className: "wall-lit", weight: 6, interactive: false },
-        }).addTo(litLayer);
+      const feat = segmentsFc.features.find((f) => f.properties.segment_id === segmentId);
+      if (feat) L.geoJSON(feat, { style: { className: "wall-lit", weight: 6, interactive: false } }).addTo(litLayer);
     },
 
     /** 내 위치 마커 (lat이 null이면 제거) */
     setUser(lat, lon) {
-      if (userMarker) userMarker.remove();
+      userMarker?.remove();
       userMarker = null;
       if (lat == null) return;
       userMarker = L.circleMarker([lat, lon], {
-        radius: 8,
-        weight: 3,
-        color: "#ffffff",
-        fillColor: "#e3a33a",
-        fillOpacity: 1,
+        radius: 8, weight: 3, color: "#ffffff", fillColor: "#e3a33a", fillOpacity: 1, interactive: false,
       }).addTo(map);
     },
 
-    /** 답변에 인용된 장소 강조. 좌표가 있는 장소만 지도에 표시 가능 */
+    /** 답변에 인용된 장소 강조 후 해당 범위로 이동. 좌표가 있는 장소만 표시 가능 */
     highlightPlaces(placeIds) {
-      placeMarkers.forEach((m) =>
-        m.setStyle({ radius: 4.5, fillColor: "#f1f2ef", color: "#20262a" }),
-      );
-      const hits = placeIds.map((id) => placeMarkers.get(id)).filter(Boolean);
-      hits.forEach((m) => {
-        m.setStyle({ radius: 7, fillColor: "#2e5242", color: "#ffffff" });
-        m.bringToFront();
-      });
-      if (userMarker) userMarker.bringToFront();
-      if (hits.length) {
-        const pts = hits.map((m) => m.getLatLng());
+      hitIds = placeIds.filter((id) => placeMarkers.has(id));
+      restylePlaces();
+      if (hitIds.length) {
+        const pts = hitIds.map((id) => placeMarkers.get(id).getLatLng());
         if (userMarker) pts.push(userMarker.getLatLng());
-        // 확대 애니메이션 비활성화 상태와 맞춰 즉시 이동
-        map.fitBounds(L.latLngBounds(pts), {
-          padding: [60, 60],
-          maxZoom: detailZoom,
-        });
+        fitTo(L.latLngBounds(pts), detailZoom - 1); // 최대 확대보다 한 단계 낮춰 주변 맥락 유지
       }
-      return hits.length;
+      return hitIds.length;
+    },
+
+    /** 장소 하나로 이동 */
+    focusPlace(id) {
+      const m = placeMarkers.get(id);
+      if (m) fitTo(L.latLngBounds([m.getLatLng()]), detailZoom);
     },
 
     onClick(handler) {
@@ -265,9 +261,7 @@ function addLayerToggle(map, oldLayer) {
         const old = btn.dataset.layer === "old";
         if (old && !map.hasLayer(oldLayer)) map.addLayer(oldLayer);
         if (!old && map.hasLayer(oldLayer)) map.removeLayer(oldLayer);
-        box
-          .querySelectorAll("button")
-          .forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
+        box.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b === btn)));
       });
       return box;
     },
